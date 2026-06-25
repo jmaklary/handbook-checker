@@ -45,6 +45,28 @@ try:
     # Drop duplicates in the form (in case a student submitted twice!)
     df_form = df_form.drop_duplicates(subset=cols_to_match)
 
+# --- 🕵️ Debug Mode ---
+    st.markdown("---")
+    st.markdown("### 🕵️ Debug Mode")
+    test_last_name = st.text_input("Type the Last Name of the test student here:")
+    
+    if test_last_name:
+        search_name = test_last_name.strip().lower()
+        
+        st.write("**What Python sees in the MASTER list:**")
+        # Find rows where the last name contains what you typed
+        master_match = df_master[df_master['Student Last Name'].str.contains(search_name, na=False)]
+        st.dataframe(master_match)
+        
+        st.write("**What Python sees in the FORM list:**")
+        form_match = df_form[df_form['Student Last Name'].str.contains(search_name, na=False)]
+        st.dataframe(form_match)
+    st.markdown("---")
+
+
+
+
+    
     # --- Comparison Logic ---
     merged = df_master.merge(df_form, on=cols_to_match, how='left', indicator=True)
     
