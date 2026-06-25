@@ -6,27 +6,35 @@ import pandas as pd
 st.set_page_config(page_title="Attendance Tracker", layout="wide")
 st.title("📊 Student Attendance Tracker")
 
-# --- Connect to Google Sheets ---
-# The connection uses the credentials we will store in Streamlit Secrets
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- Refresh Button (Must be at the top!) ---
+if st.button("🔄 Refresh Data"):
+    st.cache_data.clear()
 
-# Replace these URLs with the actual URLs of your Google Sheets
+# --- Connect to Google Sheets ---
+conn = st.connection("gsheets", type=GSheetsConnection)
 MASTER_SHEET_URL = "https://docs.google.com/spreadsheets/d/1d3zmUbavKvyo4vns4F9jbzxbdtML7oUnE4eM-WJE8b0/edit"
 FORM_SHEET_URL = "https://docs.google.com/spreadsheets/d/1EWwwrPBnLb63aIMAo710SDIQvLFXY_9LSQ9Ke9QeLKM/edit"
 
-@st.cache_data(ttl=60) # Caches data for 60 seconds to avoid hitting API limits
+@st.cache_data(ttl=60) 
 def load_data():
-    # Read the sheets into Pandas DataFrames
-    master_df = conn.read(spreadsheet=MASTER_SHEET_URL) # Adjust usecols if needed
+    master_df = conn.read(spreadsheet=MASTER_SHEET_URL) 
     form_df = conn.read(spreadsheet=FORM_SHEET_URL) 
+    
+    # Drop completely empty rows from both sheets right away
+    master_df = master_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
+    form_df = form_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
+    
     return master_df, form_df
 
 try:
     with st.spinner("Fetching live data from Google Sheets..."):
         df_master, df_form = load_data()
 
+    # Create a COPY of the cached data so Streamlit doesn't glitch
+    df_master = df_master.copy()
+    df_form = df_form.copy()
+
     # --- Data Cleaning ---
-    # Strip whitespace, remove hidden decimals, remove apostrophes, and convert to lowercase
     cols_to_match = ['Student Last Name', 'Student First Name', 'Grade Level']
     
     for col in cols_to_match:
@@ -34,11 +42,12 @@ try:
         df_master[col] = df_master[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
         df_form[col] = df_form[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
 
+    # Drop duplicates in the form (in case a student submitted twice!)
+    df_form = df_form.drop_duplicates(subset=cols_to_match)
+
     # --- Comparison Logic ---
-    # Merge the two dataframes to see who is in both, and who is only in the master
     merged = df_master.merge(df_form, on=cols_to_match, how='left', indicator=True)
     
-    # Filter based on the merge indicator
     completed_df = merged[merged['_merge'] == 'both'].drop(columns=['_merge'])
     missing_df = merged[merged['_merge'] == 'left_only'].drop(columns=['_merge'])
 
@@ -62,6 +71,3 @@ try:
 except Exception as e:
     st.error("Error loading data. Please check your Google Sheet URLs and permissions.")
     st.write(e)
-
-if st.button("🔄 Refresh Data"):
-    st.cache_data.clear()
