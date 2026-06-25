@@ -34,13 +34,18 @@ try:
     df_master = df_master.copy()
     df_form = df_form.copy()
 
-    # --- Data Cleaning ---
+   # --- Data Cleaning ---
     cols_to_match = ['Student Last Name', 'Student First Name', 'Grade Level']
     
     for col in cols_to_match:
         # Convert to string, remove '.0', remove apostrophes, strip spaces, and lowercase
         df_master[col] = df_master[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
         df_form[col] = df_form[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
+        
+        # Fix the leading zero mismatch in Grade Levels (turns "09" into "9")
+        if col == 'Grade Level':
+            df_master[col] = df_master[col].str.lstrip('0')
+            df_form[col] = df_form[col].str.lstrip('0')
 
     # Drop duplicates in the form (in case a student submitted twice!)
     df_form = df_form.drop_duplicates(subset=cols_to_match)
