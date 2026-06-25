@@ -29,10 +29,14 @@ try:
     # Strip whitespace and convert to lowercase to ensure accurate matching
     cols_to_match = ['Student Last Name', 'Student First Name', 'Grade Level']
     
+    # --- Data Cleaning ---
+    # Strip whitespace, remove hidden decimals, and convert to lowercase
+    cols_to_match = ['Student Last Name', 'Student First Name', 'Grade Level']
+    
     for col in cols_to_match:
-        df_master[col] = df_master[col].astype(str).str.strip().str.lower()
-        df_form[col] = df_form[col].astype(str).str.strip().str.lower()
-
+        # Convert to string, remove '.0' if pandas added it as a float, strip spaces, and lowercase
+        df_master[col] = df_master[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.lower()
+        df_form[col] = df_form[col].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.lower()
     # Drop duplicates in the form (in case a student submitted twice)
     df_form = df_form.drop_duplicates(subset=cols_to_match)
 
