@@ -17,8 +17,8 @@ FORM_SHEET_URL = "https://docs.google.com/spreadsheets/d/1EWwwrPBnLb63aIMAo710SD
 @st.cache_data(ttl=60) # Caches data for 60 seconds to avoid hitting API limits
 def load_data():
     # Read the sheets into Pandas DataFrames
-    master_df = conn.read(spreadsheet=MASTER_SHEET_URL, usecols=[0, 1, 2]) # Adjust usecols if needed
-    form_df = conn.read(spreadsheet=FORM_SHEET_URL, usecols=[0, 1, 2]) 
+    master_df = conn.read(spreadsheet=MASTER_SHEET_URL) # Adjust usecols if needed
+    form_df = conn.read(spreadsheet=FORM_SHEET_URL) 
     return master_df, form_df
 
 try:
