@@ -64,3 +64,6 @@ try:
 except Exception as e:
     st.error("Error loading data. Please check your Google Sheet URLs and permissions.")
     st.write(e)
+
+if st.button("🔄 Refresh Data"):
+    st.cache_data.clear()
