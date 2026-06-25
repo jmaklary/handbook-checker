@@ -9,7 +9,7 @@ if "manual_matches" not in st.session_state:
 
 # --- Page Config ---
 st.set_page_config(page_title="Attendance Tracker", layout="wide")
-st.title("📊 Student Attendance Tracker")
+st.title("📊 Family Handbook Tracker")
 
 # --- Top Dashboard Controls ---
 col_ref, col_reset = st.columns([1, 1])
