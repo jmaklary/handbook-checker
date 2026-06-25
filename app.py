@@ -7,9 +7,9 @@ from rapidfuzz import process, fuzz
 if "manual_matches" not in st.session_state:
     st.session_state.manual_matches = set()
 
-# --- Page Config ---
-st.set_page_config(page_title="Attendance Tracker", layout="wide")
-st.title("📊 Family Handbook Tracker")
+# --- Page Config (Updates the browser tab title) ---
+st.set_page_config(page_title="SLCS Handbook Checker", layout="wide")
+st.title("📚 SLCS Handbook Checker")
 
 # --- Top Dashboard Controls ---
 col_ref, col_reset = st.columns([1, 1])
@@ -144,7 +144,7 @@ try:
         })
 
     # --- Dashboard UI Layout ---
-    st.markdown("### Attendance Overview")
+    st.markdown("### Submission Overview")
     
     m1, m2, m3 = st.columns(3)
     m1.metric("✅ Confirmed Matches", len(completed_df))
@@ -180,7 +180,6 @@ try:
             c2.write(item["What They Typed"])
             c3.write(item["Confidence Score"])
             with c4:
-                # Every button receives a unique identifier string using their index combinations
                 if st.button("✅ Approve Match", key=f"btn_{item['master_idx']}_{item['form_idx']}", use_container_width=True):
                     st.session_state.manual_matches.add((item['master_idx'], item['form_idx']))
                     st.rerun()
