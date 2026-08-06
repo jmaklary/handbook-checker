@@ -3,24 +3,13 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from rapidfuzz import process, fuzz
 
-# --- Session State Memory (Must be initialized at the very top) ---
-if "manual_matches" not in st.session_state:
-    st.session_state.manual_matches = set()
-
-# --- Page Config (Updates the browser tab title) ---
+# --- Page Config ---
 st.set_page_config(page_title="SLCS Handbook Checker", layout="wide")
 st.title("📚 SLCS Handbook Checker")
 
-# --- Top Dashboard Controls ---
-col_ref, col_reset = st.columns([1, 1])
-with col_ref:
-    if st.button("🔄 Refresh Data", use_container_width=True):
-        st.cache_data.clear()
-with col_reset:
-    if len(st.session_state.manual_matches) > 0:
-        if st.button("🗑️ Reset Manual Overrides", use_container_width=True):
-            st.session_state.manual_matches.clear()
-            st.rerun()
+# --- Refresh Control ---
+if st.button("🔄 Refresh Data", use_container_width=True):
+    st.cache_data.clear()
 
 # --- Connect to Google Sheets ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -32,55 +21,64 @@ def load_data():
     master_df = conn.read(spreadsheet=MASTER_SHEET_URL) 
     form_df = conn.read(spreadsheet=FORM_SHEET_URL) 
     
+    # Read persistent manual overrides from the Google Sheet tab
+    try:
+        approved_df = conn.read(spreadsheet=MASTER_SHEET_URL, worksheet="Approved Matches")
+    except Exception:
+        approved_df = pd.DataFrame(columns=['Student Last Name', 'Student First Name', 'Grade Level'])
+
     # Drop blank rows
     master_df = master_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
     form_df = form_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
+    approved_df = approved_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
     
-    return master_df, form_df
+    return master_df, form_df, approved_df
 
 try:
     with st.spinner("Fetching live data from Google Sheets..."):
-        df_master, df_form = load_data()
+        df_master, df_form, df_approved = load_data()
 
-    # Keep original copies for clean display
+    # Clean display copies
     df_master_clean = df_master.copy()
     df_form_clean = df_form.copy()
 
     # Working copies for parsing matching text
     df_master_match = df_master.copy()
     df_form_match = df_form.copy()
+    df_approved_match = df_approved.copy() if not df_approved.empty else pd.DataFrame(columns=['Student Last Name', 'Student First Name', 'Grade Level'])
 
     # --- Data Cleaning ---
     cols_to_match = ['Student Last Name', 'Student First Name', 'Grade Level']
     for col in cols_to_match:
         df_master_match[col] = df_master_match[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
         df_form_match[col] = df_form_match[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
+        if not df_approved_match.empty and col in df_approved_match.columns:
+            df_approved_match[col] = df_approved_match[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
+        
         if col == 'Grade Level':
             df_master_match[col] = df_master_match[col].str.lstrip('0')
             df_form_match[col] = df_form_match[col].str.lstrip('0')
+            if not df_approved_match.empty and col in df_approved_match.columns:
+                df_approved_match[col] = df_approved_match[col].str.lstrip('0')
 
-    # Remove submission duplicates 
     df_form_match = df_form_match.drop_duplicates(subset=cols_to_match)
 
-    # Attach tracker integers so we can bind elements to actions
     df_master_match['master_idx'] = df_master_match.index
     df_form_match['form_idx'] = df_form_match.index
 
-    # --- Step 1: Exact Comparison & Intercept Manual Approvals ---
+    # --- Step 1: Exact Comparison & Permanent Approvals ---
     merged = df_master_match.merge(df_form_match, on=cols_to_match, how='left', indicator=True)
     
     exact_matched_master_indices = merged[merged['_merge'] == 'both']['master_idx'].tolist()
     used_form_indices = merged[merged['_merge'] == 'both']['form_idx'].tolist()
-    
-    # Inject your manually clicked overrides into the confirmed pool
-    for m_idx, f_idx in list(st.session_state.manual_matches):
-        if m_idx in df_master_match.index and f_idx in df_form_match.index:
-            if m_idx not in exact_matched_master_indices:
-                exact_matched_master_indices.append(m_idx)
-            if f_idx not in used_form_indices:
-                used_form_indices.append(f_idx)
 
-    # Isolate unsubmitted entries, dropping anyone who was manually cleared
+    # Apply saved persistent overrides from Google Sheets
+    if not df_approved_match.empty:
+        approved_merged = df_master_match.merge(df_approved_match, on=cols_to_match, how='inner')
+        for idx in approved_merged['master_idx'].tolist():
+            if idx not in exact_matched_master_indices:
+                exact_matched_master_indices.append(idx)
+
     unmatched_merged = merged[(merged['_merge'] == 'left_only') & (~merged['master_idx'].isin(exact_matched_master_indices))]
     available_form_pool = df_form_match[~df_form_match['form_idx'].isin(used_form_indices)].copy()
 
@@ -121,16 +119,14 @@ try:
         if not match_found:
             truly_missing_master_indices.append(m_idx)
 
-    # --- Step 3: Compile Final Categories Using Original Formats ---
+    # --- Step 3: Compile Final Categories ---
     completed_df = df_master_clean.loc[exact_matched_master_indices].copy()
     missing_df = df_master_clean.loc[truly_missing_master_indices].copy()
 
-    # Title-case for a professional clean layout
     for col in ['Student Last Name', 'Student First Name']:
         completed_df[col] = completed_df[col].astype(str).str.title()
         missing_df[col] = missing_df[col].astype(str).str.title()
 
-    # Gather data elements specifically to construct the Review Layout
     review_rows_data = []
     for pm in potential_matches:
         m_row = df_master_clean.loc[pm['master_idx']]
@@ -140,7 +136,10 @@ try:
             "form_idx": pm['form_idx'],
             "Roster Name": f"{m_row['Student Last Name'].title()}, {m_row['Student First Name'].title()} (Gr {m_row['Grade Level']})",
             "What They Typed": f"{f_row['Student Last Name'].title()}, {f_row['Student First Name'].title()} (Gr {f_row['Grade Level']})",
-            "Confidence Score": pm['Confidence Score']
+            "Confidence Score": pm['Confidence Score'],
+            "m_last": m_row['Student Last Name'],
+            "m_first": m_row['Student First Name'],
+            "m_grade": m_row['Grade Level']
         })
 
     # --- Dashboard UI Layout ---
@@ -163,9 +162,8 @@ try:
     if len(review_rows_data) > 0:
         st.markdown("---")
         st.warning("⚠️ **Potential Matches Found (Check for Typos/Nicknames)**")
-        st.info("The students below submitted data with typos or mismatched fields. Click **✅ Approve Match** to manually verify them:")
+        st.info("Click **✅ Approve Match** to permanently verify a student across all sessions:")
         
-        # Formulate a custom grid header
         h1, h2, h3, h4 = st.columns([3.5, 3.5, 1.5, 1.5])
         h1.markdown("**Roster Identity**")
         h2.markdown("**What Student Entered**")
@@ -173,7 +171,6 @@ try:
         h4.markdown("**Action**")
         st.markdown("<hr style='margin:0px 0px 10px 0px;'>", unsafe_allow_html=True)
         
-        # Build individual action rows
         for item in review_rows_data:
             c1, c2, c3, c4 = st.columns([3.5, 3.5, 1.5, 1.5])
             c1.write(item["Roster Name"])
@@ -181,7 +178,17 @@ try:
             c3.write(item["Confidence Score"])
             with c4:
                 if st.button("✅ Approve Match", key=f"btn_{item['master_idx']}_{item['form_idx']}", use_container_width=True):
-                    st.session_state.manual_matches.add((item['master_idx'], item['form_idx']))
+                    # Create override entry
+                    new_entry = pd.DataFrame([{
+                        'Student Last Name': item['m_last'],
+                        'Student First Name': item['m_first'],
+                        'Grade Level': item['m_grade']
+                    }])
+                    updated_approved = pd.concat([df_approved, new_entry], ignore_index=True)
+                    
+                    # Persist write-back to Google Sheet tab
+                    conn.update(spreadsheet=MASTER_SHEET_URL, worksheet="Approved Matches", data=updated_approved)
+                    st.cache_data.clear()
                     st.rerun()
 
 except Exception as e:
