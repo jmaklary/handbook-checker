@@ -165,16 +165,18 @@ try:
         if not orphaned_df.empty:
             orphaned_df[col] = orphaned_df[col].astype(str).str.title()
 
-    # --- SORTING ADDITION ---
-    # Sort the missing students by Last Name, then First Name for the table and dropdown
+    # Sort the missing students by Last Name, then First Name
     missing_df = missing_df.sort_values(by=['Student Last Name', 'Student First Name'])
 
-    # Build Batch Options
+    # Build Batch Options for orphans
     batch_options = ["-- Select Action --", "🗑️ Dismiss (Duplicate)"]
     missing_mapping = {}
+    missing_options = []
+    
     for m_idx, row in missing_df.iterrows():
         display_name = f"{row['Student Last Name']}, {row['Student First Name']} (Gr {row['Grade Level']})"
         batch_options.append(display_name)
+        missing_options.append(display_name)
         missing_mapping[display_name] = m_idx
 
     # --- Step 4: Check Agreement Columns for "No" ---
@@ -229,6 +231,33 @@ try:
     with col2:
         st.error(f"❌ Missing Students ({len(missing_df)})")
         st.dataframe(missing_df, use_container_width=True, hide_index=True)
+        
+        # --- NEW: Manual Override Section ---
+        with st.expander("🛠️ Manually Override Missing Students"):
+            st.write("Use this to manually move exempt or paper-form students to the Confirmed list.")
+            override_selections = st.multiselect(
+                "Select student(s) to force confirm:", 
+                options=missing_options,
+                help="You can search for multiple students at once."
+            )
+            if st.button("✅ Force Confirm Selected", use_container_width=True):
+                if override_selections:
+                    new_approvals = []
+                    for sel in override_selections:
+                        m_idx = missing_mapping[sel]
+                        m_row = df_master_clean.loc[m_idx]
+                        new_approvals.append({
+                            'Student Last Name': m_row['Student Last Name'],
+                            'Student First Name': m_row['Student First Name'],
+                            'Grade Level': m_row['Grade Level']
+                        })
+                    
+                    updated_approved = pd.concat([df_approved, pd.DataFrame(new_approvals)], ignore_index=True)
+                    conn.update(spreadsheet=MASTER_SHEET_URL, worksheet="Approved Matches", data=updated_approved)
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning("Please select at least one student from the dropdown first.")
 
     # --- Action Required Section ---
     if len(df_flagged) > 0:
@@ -236,7 +265,7 @@ try:
         st.error("🚨 **Action Required: Students Who Checked 'No' / Disagreed**")
         st.dataframe(df_flagged, use_container_width=True, hide_index=True)
 
-    # --- Unmatched Form Responses (BATCH BATCH PROCESS) ---
+    # --- Unmatched Form Responses (BATCH PROCESS) ---
     if len(orphaned_df) > 0:
         st.markdown("---")
         st.warning("❓ **Unmatched Form Submissions (Batch Processing)**")
