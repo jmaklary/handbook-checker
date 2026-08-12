@@ -274,7 +274,16 @@ try:
     if len(df_flagged) > 0:
         st.markdown("---")
         st.error("🚨 **Action Required: Students Who Checked 'No' / Disagreed**")
-        st.dataframe(df_flagged, use_container_width=True, hide_index=True)
+        st.dataframe(
+            df_flagged, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Student Name": st.column_config.Column("Student Name", width=180),
+                "Grade Level": st.column_config.Column("Grade Level", width=100),
+                "Flagged Responses": st.column_config.Column("Flagged Responses", width="large")
+            }
+        )
 
     # --- Unmatched Form Responses (BATCH PROCESS) ---
     if len(orphaned_df) > 0:
