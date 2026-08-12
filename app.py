@@ -279,9 +279,18 @@ try:
             use_container_width=True, 
             hide_index=True,
             column_config={
-                "Student Name": st.column_config.Column("Student Name", width=180),
-                "Grade Level": st.column_config.Column("Grade Level", width=100),
-                "Flagged Responses": st.column_config.Column("Flagged Responses", width="large")
+                "Student Name": st.column_config.TextColumn(
+                    "Student Name", 
+                    width="medium"
+                ),
+                "Grade Level": st.column_config.TextColumn(
+                    "Grade Level", 
+                    width="small"
+                ),
+                "Flagged Responses": st.column_config.TextColumn(
+                    "Flagged Responses", 
+                    width="large"
+                )
             }
         )
 
