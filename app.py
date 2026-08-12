@@ -165,6 +165,10 @@ try:
         if not orphaned_df.empty:
             orphaned_df[col] = orphaned_df[col].astype(str).str.title()
 
+    # --- SORTING ADDITION ---
+    # Sort the missing students by Last Name, then First Name for the table and dropdown
+    missing_df = missing_df.sort_values(by=['Student Last Name', 'Student First Name'])
+
     missing_options = ["-- Select Missing Student --"]
     missing_mapping = {}
     for m_idx, row in missing_df.iterrows():
