@@ -29,12 +29,18 @@ def load_data():
         approved_df = conn.read(spreadsheet=MASTER_SHEET_URL, worksheet="Approved Matches")
     except Exception:
         approved_df = pd.DataFrame(columns=['Student Last Name', 'Student First Name', 'Grade Level'])
+        
+    try:
+        ignored_df = conn.read(spreadsheet=MASTER_SHEET_URL, worksheet="Ignored Submissions")
+    except Exception:
+        ignored_df = pd.DataFrame(columns=['Student Last Name', 'Student First Name', 'Grade Level'])
 
     master_df = master_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
     form_df = form_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
     approved_df = approved_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
+    ignored_df = ignored_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
     
-    return master_df, form_df, approved_df
+    return master_df, form_df, approved_df, ignored_df
 
 def is_non_agreement(val):
     v = str(val).strip().lower()
@@ -48,33 +54,49 @@ def is_non_agreement(val):
 
 try:
     with st.spinner("Fetching live data from Google Sheets..."):
-        df_master, df_form, df_approved = load_data()
+        df_master, df_form, df_approved, df_ignored = load_data()
 
     df_master_clean = df_master.copy()
     df_form_clean = df_form.copy()
 
     df_master_match = df_master.copy()
     df_form_match = df_form.copy()
+    
     df_approved_match = df_approved.copy() if not df_approved.empty else pd.DataFrame(columns=['Student Last Name', 'Student First Name', 'Grade Level'])
+    df_ignored_match = df_ignored.copy() if not df_ignored.empty else pd.DataFrame(columns=['Student Last Name', 'Student First Name', 'Grade Level'])
 
     # --- Data Cleaning ---
     cols_to_match = ['Student Last Name', 'Student First Name', 'Grade Level']
     for col in cols_to_match:
         df_master_match[col] = df_master_match[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
         df_form_match[col] = df_form_match[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
+        
         if not df_approved_match.empty and col in df_approved_match.columns:
             df_approved_match[col] = df_approved_match[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
+            
+        if not df_ignored_match.empty and col in df_ignored_match.columns:
+            df_ignored_match[col] = df_ignored_match[col].astype(str).str.replace(r'\.0$', '', regex=True).str.replace("'", "", regex=False).str.strip().str.lower()
         
         if col == 'Grade Level':
             df_master_match[col] = df_master_match[col].str.lstrip('0')
             df_form_match[col] = df_form_match[col].str.lstrip('0')
             if not df_approved_match.empty and col in df_approved_match.columns:
                 df_approved_match[col] = df_approved_match[col].str.lstrip('0')
+            if not df_ignored_match.empty and col in df_ignored_match.columns:
+                df_ignored_match[col] = df_ignored_match[col].str.lstrip('0')
 
-    df_form_match = df_form_match.drop_duplicates(subset=cols_to_match)
-
+    # Assign IDs to track original rows
     df_master_match['master_idx'] = df_master_match.index
     df_form_match['form_idx'] = df_form_match.index
+
+    # --- Filter out Ignored Submissions ---
+    if not df_ignored_match.empty:
+        ignored_merge = df_form_match.merge(df_ignored_match, on=cols_to_match, how='left', indicator=True)
+        valid_form_indices = ignored_merge[ignored_merge['_merge'] == 'left_only']['form_idx'].tolist()
+        df_form_match = df_form_match[df_form_match['form_idx'].isin(valid_form_indices)]
+        df_form_clean = df_form_clean.loc[valid_form_indices]
+
+    df_form_match = df_form_match.drop_duplicates(subset=cols_to_match)
 
     # --- Step 1: Exact Comparison & Permanent Approvals ---
     merged = df_master_match.merge(df_form_match, on=cols_to_match, how='left', indicator=True)
@@ -143,7 +165,6 @@ try:
         if not orphaned_df.empty:
             orphaned_df[col] = orphaned_df[col].astype(str).str.title()
 
-    # Create mapping for the Missing Students Dropdown
     missing_options = ["-- Select Missing Student --"]
     missing_mapping = {}
     for m_idx, row in missing_df.iterrows():
@@ -214,11 +235,10 @@ try:
     if len(orphaned_df) > 0:
         st.markdown("---")
         st.warning("❓ **Unmatched Form Submissions (Manual Linking)**")
-        st.info("The students below submitted the form but could not be matched algorithmically. Use the dropdown to link them to the correct student on your missing list.")
+        st.info("Link these submissions to a missing student, OR dismiss them if they are duplicates.")
         
-        # Build individual action rows for orphans
         for f_idx, f_row in orphaned_df.iterrows():
-            c1, c2, c3 = st.columns([3, 4, 2])
+            c1, c2, c3, c4 = st.columns([3, 3, 2, 2])
             
             form_text = f"{f_row['Student Last Name']}, {f_row['Student First Name']} (Gr {f_row['Grade Level']})"
             c1.write(f"**Submitted:** {form_text}")
@@ -243,13 +263,23 @@ try:
                             'Grade Level': m_row['Grade Level']
                         }])
                         updated_approved = pd.concat([df_approved, new_entry], ignore_index=True)
-                        
-                        # Persist write-back to Google Sheet tab
                         conn.update(spreadsheet=MASTER_SHEET_URL, worksheet="Approved Matches", data=updated_approved)
                         st.cache_data.clear()
                         st.rerun()
                     else:
-                        st.error("Please select a valid student from the list.")
+                        st.error("Please select a valid student.")
+            
+            with c4:
+                if st.button("🗑️ Dismiss (Duplicate)", key=f"dismiss_btn_{f_idx}", use_container_width=True):
+                    new_ignore = pd.DataFrame([{
+                        'Student Last Name': f_row['Student Last Name'],
+                        'Student First Name': f_row['Student First Name'],
+                        'Grade Level': f_row['Grade Level']
+                    }])
+                    updated_ignored = pd.concat([df_ignored, new_ignore], ignore_index=True)
+                    conn.update(spreadsheet=MASTER_SHEET_URL, worksheet="Ignored Submissions", data=updated_ignored)
+                    st.cache_data.clear()
+                    st.rerun()
 
     # --- Interactive Review Component (Fuzzy Matches) ---
     if len(review_rows_data) > 0:
