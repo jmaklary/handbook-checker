@@ -171,12 +171,10 @@ try:
     # Build Batch Options for orphans
     batch_options = ["-- Select Action --", "🗑️ Dismiss (Duplicate)"]
     missing_mapping = {}
-    missing_options = []
     
     for m_idx, row in missing_df.iterrows():
         display_name = f"{row['Student Last Name']}, {row['Student First Name']} (Gr {row['Grade Level']})"
         batch_options.append(display_name)
-        missing_options.append(display_name)
         missing_mapping[display_name] = m_idx
 
     # --- Step 4: Check Agreement Columns for "No" ---
@@ -228,36 +226,49 @@ try:
     with col1:
         st.success(f"✅ Confirmed Matches ({len(completed_df)})")
         st.dataframe(completed_df, use_container_width=True, hide_index=True)
+        
     with col2:
         st.error(f"❌ Missing Students ({len(missing_df)})")
-        st.dataframe(missing_df, use_container_width=True, hide_index=True)
         
-        # --- NEW: Manual Override Section ---
-        with st.expander("🛠️ Manually Override Missing Students"):
-            st.write("Use this to manually move exempt or paper-form students to the Confirmed list.")
-            override_selections = st.multiselect(
-                "Select student(s) to force confirm:", 
-                options=missing_options,
-                help="You can search for multiple students at once."
-            )
-            if st.button("✅ Force Confirm Selected", use_container_width=True):
-                if override_selections:
-                    new_approvals = []
-                    for sel in override_selections:
-                        m_idx = missing_mapping[sel]
-                        m_row = df_master_clean.loc[m_idx]
-                        new_approvals.append({
-                            'Student Last Name': m_row['Student Last Name'],
-                            'Student First Name': m_row['Student First Name'],
-                            'Grade Level': m_row['Grade Level']
-                        })
-                    
-                    updated_approved = pd.concat([df_approved, pd.DataFrame(new_approvals)], ignore_index=True)
-                    conn.update(spreadsheet=MASTER_SHEET_URL, worksheet="Approved Matches", data=updated_approved)
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.warning("Please select at least one student from the dropdown first.")
+        # Add checkbox column for manual overrides
+        missing_display = missing_df.copy()
+        missing_display.insert(0, "Force Confirm", False)
+        
+        # Interactive dataframe with checkboxes
+        edited_missing = st.data_editor(
+            missing_display,
+            hide_index=True,
+            use_container_width=True,
+            disabled=["Student Last Name", "Student First Name", "Grade Level"],
+            column_config={
+                "Force Confirm": st.column_config.CheckboxColumn(
+                    "Confirm?", 
+                    help="Check to manually mark this student as confirmed (e.g. paper forms)",
+                    default=False
+                )
+            },
+            key="missing_students_editor"
+        )
+        
+        # Process checked students
+        if st.button("✅ Force Confirm Selected Students", use_container_width=True):
+            selected_rows = edited_missing[edited_missing["Force Confirm"] == True]
+            
+            if not selected_rows.empty:
+                new_approvals = []
+                for _, row in selected_rows.iterrows():
+                    new_approvals.append({
+                        'Student Last Name': row['Student Last Name'],
+                        'Student First Name': row['Student First Name'],
+                        'Grade Level': row['Grade Level']
+                    })
+                
+                updated_approved = pd.concat([df_approved, pd.DataFrame(new_approvals)], ignore_index=True)
+                conn.update(spreadsheet=MASTER_SHEET_URL, worksheet="Approved Matches", data=updated_approved)
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.warning("Please check at least one student before clicking confirm.")
 
     # --- Action Required Section ---
     if len(df_flagged) > 0:
