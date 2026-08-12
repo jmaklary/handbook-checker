@@ -3,6 +3,10 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from rapidfuzz import process, fuzz
 
+# --- Session State Memory ---
+if "manual_matches" not in st.session_state:
+    st.session_state.manual_matches = set()
+
 # --- Page Config ---
 st.set_page_config(page_title="SLCS Handbook Checker", layout="wide")
 st.title("📚 SLCS Handbook Checker")
@@ -21,28 +25,34 @@ def load_data():
     master_df = conn.read(spreadsheet=MASTER_SHEET_URL) 
     form_df = conn.read(spreadsheet=FORM_SHEET_URL) 
     
-    # Read persistent manual overrides from the Google Sheet tab
     try:
         approved_df = conn.read(spreadsheet=MASTER_SHEET_URL, worksheet="Approved Matches")
     except Exception:
         approved_df = pd.DataFrame(columns=['Student Last Name', 'Student First Name', 'Grade Level'])
 
-    # Drop blank rows
     master_df = master_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
     form_df = form_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
     approved_df = approved_df.dropna(subset=['Student Last Name', 'Student First Name'], how='all')
     
     return master_df, form_df, approved_df
 
+def is_non_agreement(val):
+    v = str(val).strip().lower()
+    if v in ['no', 'n', 'no agreement', 'do not agree', 'i do not agree', 'disagree', 'not agreed']:
+        return True
+    if any(phrase in v for phrase in ['do not agree', 'i do not agree', 'disagree', 'no agreement', 'not agree', 'opt out']):
+        return True
+    if v.startswith('no -') or v.startswith('no,') or v.startswith('no '):
+        return True
+    return False
+
 try:
     with st.spinner("Fetching live data from Google Sheets..."):
         df_master, df_form, df_approved = load_data()
 
-    # Clean display copies
     df_master_clean = df_master.copy()
     df_form_clean = df_form.copy()
 
-    # Working copies for parsing matching text
     df_master_match = df_master.copy()
     df_form_match = df_form.copy()
     df_approved_match = df_approved.copy() if not df_approved.empty else pd.DataFrame(columns=['Student Last Name', 'Student First Name', 'Grade Level'])
@@ -72,7 +82,6 @@ try:
     exact_matched_master_indices = merged[merged['_merge'] == 'both']['master_idx'].tolist()
     used_form_indices = merged[merged['_merge'] == 'both']['form_idx'].tolist()
 
-    # Apply saved persistent overrides from Google Sheets
     if not df_approved_match.empty:
         approved_merged = df_master_match.merge(df_approved_match, on=cols_to_match, how='inner')
         for idx in approved_merged['master_idx'].tolist():
@@ -92,6 +101,7 @@ try:
         form_idx_map = available_form_pool['form_idx'].tolist()
     else:
         form_choices = []
+        form_idx_map = []
 
     for _, row in unmatched_merged.iterrows():
         m_idx = row['master_idx']
@@ -119,13 +129,47 @@ try:
         if not match_found:
             truly_missing_master_indices.append(m_idx)
 
+    # --- Step 2.5: Catch the Orphaned Form Submissions ---
+    orphaned_form_indices = form_idx_map 
+
     # --- Step 3: Compile Final Categories ---
     completed_df = df_master_clean.loc[exact_matched_master_indices].copy()
     missing_df = df_master_clean.loc[truly_missing_master_indices].copy()
+    orphaned_df = df_form_clean.loc[orphaned_form_indices].copy()
 
     for col in ['Student Last Name', 'Student First Name']:
         completed_df[col] = completed_df[col].astype(str).str.title()
         missing_df[col] = missing_df[col].astype(str).str.title()
+        if not orphaned_df.empty:
+            orphaned_df[col] = orphaned_df[col].astype(str).str.title()
+
+    # Create mapping for the Missing Students Dropdown
+    missing_options = ["-- Select Missing Student --"]
+    missing_mapping = {}
+    for m_idx, row in missing_df.iterrows():
+        display_name = f"{row['Student Last Name']}, {row['Student First Name']} (Gr {row['Grade Level']})"
+        missing_options.append(display_name)
+        missing_mapping[display_name] = m_idx
+
+    # --- Step 4: Check Agreement Columns for "No" ---
+    ignore_cols = ['Student Last Name', 'Student First Name', 'Grade Level', 'Timestamp', 'form_idx', 'master_idx']
+    question_cols = [c for c in df_form_clean.columns if c not in ignore_cols]
+    
+    flagged_students = []
+    for _, row in df_form_clean.iterrows():
+        reasons = []
+        for q_col in question_cols:
+            answer = str(row[q_col]).strip()
+            if is_non_agreement(answer):
+                reasons.append(f"**{q_col}**: {answer}")
+        
+        if reasons:
+            flagged_students.append({
+                "Student Name": f"{str(row['Student Last Name']).title()}, {str(row['Student First Name']).title()}",
+                "Grade Level": row['Grade Level'],
+                "Flagged Responses": "  |  ".join(reasons)
+            })
+    df_flagged = pd.DataFrame(flagged_students)
 
     review_rows_data = []
     for pm in potential_matches:
@@ -145,10 +189,12 @@ try:
     # --- Dashboard UI Layout ---
     st.markdown("### Submission Overview")
     
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("✅ Confirmed Matches", len(completed_df))
-    m2.metric("⚠️ Needs Quick Review", len(review_rows_data))
-    m3.metric("❌ Truly Missing", len(missing_df))
+    m2.metric("⚠️ Quick Review", len(review_rows_data))
+    m3.metric("❓ Unmatched Submissions", len(orphaned_df))
+    m4.metric("❌ Truly Missing", len(missing_df))
+    m5.metric("🚨 Action Required", len(df_flagged))
     
     col1, col2 = st.columns(2)
     with col1:
@@ -158,7 +204,54 @@ try:
         st.error(f"❌ Missing Students ({len(missing_df)})")
         st.dataframe(missing_df, use_container_width=True, hide_index=True)
 
-    # --- Interactive Review Component ---
+    # --- Action Required Section ---
+    if len(df_flagged) > 0:
+        st.markdown("---")
+        st.error("🚨 **Action Required: Students Who Checked 'No' / Disagreed**")
+        st.dataframe(df_flagged, use_container_width=True, hide_index=True)
+
+    # --- Unmatched Form Responses (Manual Linking Dropdown) ---
+    if len(orphaned_df) > 0:
+        st.markdown("---")
+        st.warning("❓ **Unmatched Form Submissions (Manual Linking)**")
+        st.info("The students below submitted the form but could not be matched algorithmically. Use the dropdown to link them to the correct student on your missing list.")
+        
+        # Build individual action rows for orphans
+        for f_idx, f_row in orphaned_df.iterrows():
+            c1, c2, c3 = st.columns([3, 4, 2])
+            
+            form_text = f"{f_row['Student Last Name']}, {f_row['Student First Name']} (Gr {f_row['Grade Level']})"
+            c1.write(f"**Submitted:** {form_text}")
+            
+            with c2:
+                selected_missing = st.selectbox(
+                    "Link to Master Roster:", 
+                    options=missing_options, 
+                    key=f"select_{f_idx}",
+                    label_visibility="collapsed"
+                )
+            
+            with c3:
+                if st.button("🔗 Link & Approve", key=f"link_btn_{f_idx}", use_container_width=True):
+                    if selected_missing != "-- Select Missing Student --":
+                        m_idx = missing_mapping[selected_missing]
+                        m_row = df_master_clean.loc[m_idx]
+                        
+                        new_entry = pd.DataFrame([{
+                            'Student Last Name': m_row['Student Last Name'],
+                            'Student First Name': m_row['Student First Name'],
+                            'Grade Level': m_row['Grade Level']
+                        }])
+                        updated_approved = pd.concat([df_approved, new_entry], ignore_index=True)
+                        
+                        # Persist write-back to Google Sheet tab
+                        conn.update(spreadsheet=MASTER_SHEET_URL, worksheet="Approved Matches", data=updated_approved)
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("Please select a valid student from the list.")
+
+    # --- Interactive Review Component (Fuzzy Matches) ---
     if len(review_rows_data) > 0:
         st.markdown("---")
         st.warning("⚠️ **Potential Matches Found (Check for Typos/Nicknames)**")
@@ -178,15 +271,12 @@ try:
             c3.write(item["Confidence Score"])
             with c4:
                 if st.button("✅ Approve Match", key=f"btn_{item['master_idx']}_{item['form_idx']}", use_container_width=True):
-                    # Create override entry
                     new_entry = pd.DataFrame([{
                         'Student Last Name': item['m_last'],
                         'Student First Name': item['m_first'],
                         'Grade Level': item['m_grade']
                     }])
                     updated_approved = pd.concat([df_approved, new_entry], ignore_index=True)
-                    
-                    # Persist write-back to Google Sheet tab
                     conn.update(spreadsheet=MASTER_SHEET_URL, worksheet="Approved Matches", data=updated_approved)
                     st.cache_data.clear()
                     st.rerun()
